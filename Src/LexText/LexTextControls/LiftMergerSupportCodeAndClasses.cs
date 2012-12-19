@@ -2583,7 +2583,7 @@ namespace SIL.FieldWorks.LexText.Controls
 						m_combinedCollections.Add(col);
 					}
 				}
-				referenceCollection.Replace(0, referenceCollection.Count, complexEntryTypes);
+				referenceCollection.Replace(0, referenceCollection.Count, complexEntryTypes.Cast<ICmObject>());
 			}
 		}
 
@@ -2670,8 +2670,8 @@ namespace SIL.FieldWorks.LexText.Controls
 								ILexEntryType sub = poss as ILexEntryType;
 								if (sub != null &&
 									(sub.Name.AnalysisDefaultWritingSystem.Text == sOldCondition ||
-									 sub.Abbreviation.AnalysisDefaultWritingSystem.Text == sOldCondition ||
-									 sub.ReverseAbbr.AnalysisDefaultWritingSystem.Text == sOldCondition))
+										sub.Abbreviation.AnalysisDefaultWritingSystem.Text == sOldCondition ||
+										sub.ReverseAbbr.AnalysisDefaultWritingSystem.Text == sOldCondition))
 								{
 									subtype = sub;
 									break;
@@ -2896,26 +2896,26 @@ namespace SIL.FieldWorks.LexText.Controls
 		}
 
 		private void StorePendingCollectionRelations(IProgress progress,
-													 Dictionary<string, List<Tuple<Set<int>, Set<PendingRelation>>>> relationMap)
+			Dictionary<string, List<Tuple<Set<int>, Set<PendingRelation>>>> relationMap)
 		{
 			progress.Message = String.Format(LexTextControls.ksSettingCollectionRelationLinks,
 				m_rgPendingCollectionRelations.Count);
 			progress.Minimum = 0;
 			progress.Maximum = relationMap.Count;
 			progress.Position = 0;
-			foreach(var typeCollections in relationMap) //for each relationType
+			foreach (var typeCollections in relationMap) //for each relationType
 			{
 				string sType = typeCollections.Key;
-				foreach (var collection in typeCollections.Value)//for each grouping of relations for that type
+				foreach (var collection in typeCollections.Value) //for each grouping of relations for that type
 				{
 					var incomingRelationIDs = collection.Item1;
 					var incomingRelations = collection.Item2;
 					ILexRefType lrt = FindOrCreateLexRefType(sType, incomingRelations.FirstItem().IsSequence);
-					if (CollectionRelationAlreadyExists(lrt, incomingRelationIDs))
+					if (IsAnExistingCollectionAnExactMatch(lrt, incomingRelationIDs))
 						continue;
 					List<ICmObject> oldItems;
 					var lr = FindExistingSequence(lrt, incomingRelations, out oldItems);
-					if(lr == null)
+					if (lr == null)
 					{
 						lr = CreateNewLexReference();
 						lrt.MembersOC.Add(lr);
@@ -2937,7 +2937,7 @@ namespace SIL.FieldWorks.LexText.Controls
 		/// This method is necessary to prevent duplication of sets of relations due to the fact they are replicated in
 		/// all the members of the relation in the LIFT file.
 		/// </summary>
-		private static bool CollectionRelationAlreadyExists(ILexRefType lrt, Set<int> checkTargets)
+		private static bool IsAnExistingCollectionAnExactMatch(ILexRefType lrt, Set<int> checkTargets)
 		{
 			foreach (var lr in lrt.MembersOC)
 			{
@@ -2965,7 +2965,7 @@ namespace SIL.FieldWorks.LexText.Controls
 				currentSet.Add(cmo.Hvo);
 			}
 			var intersectors = currentSet.Intersect(setRelation);
-			if(intersectors.Count() == 0) //the two sets are unrelated, and shouldn't be merged
+			if (intersectors.Count() == 0) //the two sets are unrelated, and shouldn't be merged
 			{
 				return;
 			}
@@ -2974,7 +2974,7 @@ namespace SIL.FieldWorks.LexText.Controls
 			if (!intersectors.ContainsCollection(setRelation) && !intersectors.ContainsCollection(currentSet))
 			{
 				CombinedCollection conflictingData;
-				foreach(var item in currentSet)
+				foreach (var item in currentSet)
 				{
 					if (!intersectors.Contains(item))
 					{
@@ -2996,12 +2996,28 @@ namespace SIL.FieldWorks.LexText.Controls
 		private void StoreSequenceRelation(ILexRefType lrt, List<
 			PendingRelation> rgRelation)
 		{
-			if (SequenceRelationAlreadyExists(lrt, rgRelation))
+			if (IsAnExistingSequenceAnExactMatch(lrt, rgRelation))
 				return;
-			ILexReference lr = CreateNewLexReference();
-			lrt.MembersOC.Add(lr);
-			for (int i = 0; i < rgRelation.Count; ++i)
-				lr.TargetsRS.Add(GetObjectForId(rgRelation[i].TargetHvo));
+			List<ICmObject> oldItems;
+			var lr = FindExistingSequence(lrt, rgRelation, out oldItems);
+			if (lr == null) //This is a new relation, add all the targets
+			{
+				lr = CreateNewLexReference();
+				lrt.MembersOC.Add(lr);
+				for (int i = 0; i < rgRelation.Count; ++i)
+				{
+					lr.TargetsRS.Add(GetObjectForId(rgRelation[i].TargetHvo));
+				}
+			}
+			else //Reusing an old relation, replace the contents of the Targets sequence
+			{
+				var targetList = new List<ICmObject>();
+				for (int i = 0; i < rgRelation.Count; ++i)
+				{
+					targetList.Add(GetObjectForId(rgRelation[i].TargetHvo));
+				}
+				lr.TargetsRS.Replace(0, lr.TargetsRS.Count, targetList);
+			}
 			StoreRelationResidue(lr, rgRelation[0]);
 		}
 
@@ -3012,13 +3028,13 @@ namespace SIL.FieldWorks.LexText.Controls
 		/// <param name="lrt">the ILexRefType to check</param>
 		/// <param name="rgRelation">An ordered list of relations from the LIFT file</param>
 		/// <returns>true if this sequence already exists in the system</returns>
-		private static bool SequenceRelationAlreadyExists(ILexRefType lrt, List<PendingRelation> rgRelation)
+		private static bool IsAnExistingSequenceAnExactMatch(ILexRefType lrt, List<PendingRelation> rgRelation)
 		{
-			foreach (ILexReference lr in lrt.MembersOC)
+			foreach (var lr in lrt.MembersOC)
 			{
 				if (lr.TargetsRS.Count != rgRelation.Count)
 					continue;
-				bool fSame = true;
+				var fSame = true;
 				for (int i = 0; i < rgRelation.Count; ++i)
 				{
 					if (lr.TargetsRS[i].Hvo != rgRelation[i].TargetHvo)

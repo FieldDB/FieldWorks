@@ -977,14 +977,21 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 		protected T FluffUpObjectIfNeeded(int index)
 		{
 			var item = m_items[index];
-			var result = item as T;
-			if (result != null)
-				return result;
-			//result = (T) item.GetObject(MainObject.Services.GetInstance<ICmObjectRepository>());
-			result = (T)item.GetObject(m_mainObject.Cache.ServiceLocator.ObjectRepository);
-			FluffUpSideEffects(result);
+			var result = FluffUpObjectIfNeeded(item);
 			m_items[index] = result; // faster next time, and prevents side effects being repeated.
 			return result;
+		}
+
+		private T FluffUpObjectIfNeeded(ICmObjectOrId fluffee)
+		{
+			var fluffed = fluffee as T;
+			if(fluffed != null)
+			{
+				return fluffed;
+			}
+			fluffed = (T)fluffee.GetObject(m_mainObject.Cache.ServiceLocator.ObjectRepository);
+			FluffUpObjectIfNeeded(fluffed);
+			return fluffed;
 		}
 
 		internal virtual void FluffUpSideEffects(object thingJustFluffed)
@@ -1083,8 +1090,7 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 		/// <summary>
 		/// Replace the indicated number of objects (possibly zero) starting at the indicated position
 		/// with the new objects (possibly empty).
-		/// In the case of owning properties, the deleted objects are really deleted; this code does
-		/// not handle the possibility that some of them are included in thingsToAdd.
+		/// In the case of owning properties, the deleted objects are really deleted.
 		/// The code will handle both newly created objects and ones being moved from elsewhere
 		/// (including another location in the same sequence).
 		/// </summary>
@@ -1108,59 +1114,71 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 				List<T> removed;
 				List<T> newAdditions;
 				BuildCollections(thingsToAdd.Cast<T>().ToList(), deletedSubset, out removedAndReAdded, out removed, out newAdditions);
-				Debug.Assert(removedAndReAdded.Count + removed.Count() == numberToDelete, "Logic for handling deletes is incomplete, we won't be attempting enough removes.");
+				Debug.Assert(removedAndReAdded.Count + removed.Count() == numberToDelete,
+					"Logic for handling deletes is incomplete, we won't be attempting enough removes.");
 				Debug.Assert(removedAndReAdded.Count + newAdditions.Count == thingsToAdd.Count());
+				var removedItemsNeedingSideEffects = new List<Tuple<int, ICmObjectOrId>>();
 				//iterator for the things we're adding
-				var itr = thingsToAdd.GetEnumerator();
-				//traverse the removed section and the add section simlutaneously
-				int index = start;
-				bool hasNext = itr.MoveNext(); //get the iterator to the first item.
-				while(hasNext || numberToDelete > 0)
+				using (var itr = thingsToAdd.GetEnumerator())
 				{
-					if (index < Count)
+					//traverse the removed section and the add section simlutaneously
+					int index = start;
+					bool hasNext = itr.MoveNext(); //get the iterator to the first item.
+					while (hasNext || numberToDelete > 0)
 					{
-						//check the current index for removal
-						if (removed.Contains(this[index]))
+						if (index < Count)
 						{
-							removed.Remove(this[index]);
-							RemoveAt(index);
-							--numberToDelete;
-							continue; //we didn't use the iterator, don't advance it
-						}
-						if (removedAndReAdded.Contains(this[index]))
-						{
-							removedAndReAdded.Remove(this[index]);
-							if (!newAdditions.Contains((T)itr.Current))//the item we are adding is not new
+							//check the current index for removal
+							if (removed.Contains(this[index]))
 							{
-								m_items[index] = (T) itr.Current; //avoid all side effects on a move of an existing item.
+								removed.Remove(this[index]);
+								removedItemsNeedingSideEffects.Add(new Tuple<int, ICmObjectOrId>(index, m_items[index]));
+								m_items.RemoveAt(index);
+								--numberToDelete;
+								continue; //we didn't use the iterator, don't advance it
 							}
-							else//the item we are adding is new
+							if (removedAndReAdded.Contains(this[index]))
 							{
-
-								m_items.RemoveAt(index);//remove without side effects
-								Insert(index, (T)itr.Current);//add with side effects
+								removedAndReAdded.Remove(this[index]);
+								if (!newAdditions.Contains((T) itr.Current)) //the item we are adding is not new
+								{
+									m_items[index] = (T) itr.Current; //avoid all side effects on a move of an existing item.
+								}
+								else //the item we are adding is new
+								{
+									m_items.RemoveAt(index); //remove without side effects
+									Insert(index, (T) itr.Current); //add with side effects
+									newAdditions.Remove((T) itr.Current);
+								}
+								++index;
+								--numberToDelete;
+								hasNext = itr.MoveNext(); //we replaced the current index, this is a removal, and a use of the iterator
+								continue;
+							}
+						}
+						if (hasNext) //we have more items to add
+						{
+							if (removedAndReAdded.Contains((T) itr.Current)) //if the item was just moved, insert without side affects
+							{
+								removedAndReAdded.Remove((T) itr.Current);
+								m_items.Insert(index, itr.Current);
+							}
+							else //if the item is new use the insert that fires events
+							{
+								Insert(index, (T) itr.Current);
 								newAdditions.Remove((T) itr.Current);
 							}
 							++index;
-							--numberToDelete;
-							hasNext = itr.MoveNext(); //we replaced the current index, this is a removal, and a use of the iterator
-							continue;
+							hasNext = itr.MoveNext();
 						}
 					}
-					if (hasNext) //we have more items to add
+					foreach (var removedObject in removedItemsNeedingSideEffects)
 					{
-						if (removedAndReAdded.Contains((T)itr.Current)) //if the item was just moved, insert without side affects
-						{
-							removedAndReAdded.Remove((T)itr.Current);
-							m_items.Insert(index, itr.Current);
-						}
-						else //if the item is new use the insert that fires events
-						{
-							Insert(index, (T)itr.Current);
-							newAdditions.Remove((T) itr.Current);
-						}
-						++index;
-						hasNext = itr.MoveNext();
+						var deadObject = FluffUpObjectIfNeeded(removedObject.Item2);
+						RemoveRefsTo((ICmObjectInternal) deadObject);
+						// Before side effects (e.g., target needs to know it is no longer referring).
+						MainObject.RemoveObjectSideEffects(new RemoveObjectEventArgs(deadObject, Flid, removedObject.Item1, true));
+						DeleteObject((ICmObjectInternal) deadObject); // After side effects (e.g., side effects may want a valid object).
 					}
 				}
 			}
@@ -1170,7 +1188,7 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 				var loc = start + numberToDelete;
 				foreach (var obj in thingsToAdd)
 				{
-					Insert(loc, (T)obj);
+					Insert(loc, (T) obj);
 					loc++;
 				}
 			}
@@ -1894,6 +1912,8 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 			m_items.RemoveAt(index);
 		}
 
+		#region IList<T> overrides
+
 		/// <summary>
 		/// Replace the indicated number of objects (possibly zero) starting at the indicated position
 		/// with the new objects (possibly empty).
@@ -1917,8 +1937,6 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 				loc = IndexOf((T)obj) + 1;
 			}
 		}
-
-		#region IList<T> overrides
 
 		/// <summary>
 		/// Get or set the element at the specified <paramref name="index"/>.
