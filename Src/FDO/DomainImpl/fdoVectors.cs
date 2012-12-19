@@ -990,7 +990,10 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 				return fluffed;
 			}
 			fluffed = (T)fluffee.GetObject(m_mainObject.Cache.ServiceLocator.ObjectRepository);
-			FluffUpObjectIfNeeded(fluffed);
+			// This side effect call IS needed, even though the local method does nothing.
+			// It has an important override in ReferenceSequence.
+			// See the unit test FdoMainVectorTests.FluffIngRefSeq_EstablishesBackref.
+			FluffUpSideEffects(fluffed);
 			return fluffed;
 		}
 
@@ -1722,6 +1725,20 @@ namespace SIL.FieldWorks.FDO.DomainImpl
 		{
 			base.FluffUpSideEffects(thingJustFluffed);
 			((ICmObjectInternal)thingJustFluffed).AddIncomingRef(this);
+		}
+
+		/// <summary>
+		/// Test-only method to force the ref sequence into the unfluffed state.
+		/// </summary>
+		internal void Unfluff()
+		{
+			for (int i = 0; i < Count; i++)
+			{
+				if (m_items[i] is ICmObjectId)
+					continue;
+				((ICmObjectInternal)m_items[i]).RemoveIncomingRef(this);
+				m_items[i] = m_items[i].Id;
+			}
 		}
 
 		#endregion Construction and Initializing

@@ -356,6 +356,20 @@ namespace SIL.FieldWorks.FDO.Infrastructure.Impl
 				m_completeIncomingRefs.Add(flid);
 			}
 		}
+
+		/// <summary>
+		/// This test-only method is used to force a sequence property into the "unfluffed" state so we can test fluffing.
+		/// </summary>
+		/// <typeparam name="T"></typeparam>
+		/// <param name="seq"></param>
+		internal void UnfluffSequence<T>(FdoReferenceSequence<T> seq) where T : class, ICmObject
+		{
+			m_newInstancesThisSession.Remove(seq.MainObject); // newly created objects are not supposed to need fluffing
+			foreach (var obj in seq)
+				m_newInstancesThisSession.Remove(obj); // nor are their backrefs supposed to be questionable.
+			m_completeIncomingRefs.Remove(seq.Flid);
+			seq.Unfluff();
+		}
 	}
 	#endregion
 

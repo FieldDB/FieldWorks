@@ -404,6 +404,39 @@ namespace SIL.FieldWorks.FDO.CoreTests.VectorTests
 		}
 		#endregion
 
+		/// <summary>
+		/// When we "fluff up" a CmObjectId in a reference sequence, the referring object should be
+		/// found as one of the things that refers to the destination.
+		/// </summary>
+		[Test]
+		public void FluffIngRefSeq_EstablishesBackref()
+		{
+			var star = MakeEntry("star", "great performer");
+			var allStar = MakeEntry("all-star", "everyone great");
+			var allStarComponents = MakeEntryRef(allStar);
+			allStarComponents.RefType = LexEntryRefTags.krtComplexForm;
+			Assert.That(allStarComponents.PrimaryEntryRoots, Is.Empty);
+			Assert.That(allStarComponents.NonTrivialEntryRoots, Is.Empty);
+			Assert.AreEqual(0, star.ReferringObjects.Count(), "nothing should refer to the star entry initially");
+
+			allStarComponents.ComponentLexemesRS.Add(star);
+
+			Assert.AreEqual(1, star.ReferringObjects.Count(), "now the lex entry ref refers to the star");
+
+			// Now we need to get things in the state where the reference is a CmObjectId, as if we had read if from
+			// disk but not yet "fluffed it up".
+			((CmObjectRepository) Cache.ServiceLocator.ObjectRepository).UnfluffSequence(
+				(FdoReferenceSequence<ICmObject>) allStarComponents.ComponentLexemesRS);
+
+			Assert.AreEqual(1, star.ReferringObjects.Count(), "Fluffing it up should re-register the back refernce");
+		}
+
+		private ILexEntryRef MakeEntryRef(ILexEntry entry)
+		{
+			var form = Cache.ServiceLocator.GetInstance<ILexEntryRefFactory>().Create();
+			entry.EntryRefsOS.Add(form);
+			return form;
+		}
 
 		/// ------------------------------------------------------------------------------------
 		/// <summary>
